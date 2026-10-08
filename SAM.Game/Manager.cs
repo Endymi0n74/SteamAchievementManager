@@ -378,6 +378,7 @@ namespace SAM.Game
                                 ? stat["maxchange"].AsFloat(0.0f)
                                 : (float?)null,
                             IncrementOnly = stat["incrementonly"].AsBoolean(false),
+                            AverageRate = type == APITypes.UserStatType.AverageRate,
                             DefaultValue = stat["default"].AsFloat(0.0f),
                             Permission = stat["permission"].AsInteger(0),
                         });
@@ -907,6 +908,7 @@ namespace SAM.Game
                         FloatValue = value,
                         OriginalValue = value,
                         IsIncrementOnly = floatStat.IncrementOnly,
+                        IsAverageRate = floatStat.AverageRate,
                         Permission = floatStat.Permission,
                         MinValue = floatStat.MinValue,
                         MaxValue = floatStat.MaxValue,
@@ -1023,7 +1025,11 @@ namespace SAM.Game
                         MessageBox.Show(
                             this,
                             $"An error occurred while setting the value for {stat.Id}{DescribeConstraintsSuffix(stat)}, aborting store.\n" +
-                            "The other pending changes are kept, you can fix the value and retry.",
+                            "The other pending changes are kept, you can fix the value and retry." +
+                            (stat.IsAverageRate == true
+                                ? "\n\nNote: this is an average rate statistic; Steam updates those from " +
+                                  "session data (UpdateAvgRateStat) and often rejects SetStat."
+                                : ""),
                             "Error",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Error);
@@ -1032,7 +1038,13 @@ namespace SAM.Game
                 }
                 else
                 {
-                    throw new InvalidOperationException("unsupported stat type");
+                    MessageBox.Show(
+                        this,
+                        $"Unsupported statistic type for {stat.Id}, aborting store.",
+                        "Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                    return -1;
                 }
             }
 

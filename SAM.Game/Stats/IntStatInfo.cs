@@ -38,7 +38,14 @@ namespace SAM.Game.Stats
             get => this.IntValue;
             set
             {
-                var i = int.Parse((string)value, System.Globalization.CultureInfo.CurrentCulture);
+                // The grid can hand back the boxed int it originally displayed;
+                // only strings need parsing (a raw cast threw InvalidCastException,
+                // reported as a misleading "Invalid value").
+                var i = value is int rawValue
+                    ? rawValue
+                    : int.Parse(
+                        System.Convert.ToString(value, System.Globalization.CultureInfo.CurrentCulture),
+                        System.Globalization.CultureInfo.CurrentCulture);
                 if ((this.Permission & 2) != 0 &&
                     this.IntValue != i)
                 {

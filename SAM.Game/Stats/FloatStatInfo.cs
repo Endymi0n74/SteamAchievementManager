@@ -38,7 +38,13 @@ namespace SAM.Game.Stats
             get => this.FloatValue;
             set
             {
-                var f = float.Parse((string)value, System.Globalization.CultureInfo.CurrentCulture);
+                // The grid can hand back the boxed float it originally displayed;
+                // only strings need parsing (a raw cast threw InvalidCastException).
+                var f = value is float rawValue
+                    ? rawValue
+                    : float.Parse(
+                        System.Convert.ToString(value, System.Globalization.CultureInfo.CurrentCulture),
+                        System.Globalization.CultureInfo.CurrentCulture);
                 if ((this.Permission & 2) != 0 &&
                     this.FloatValue.Equals(f) == false)
                 {
