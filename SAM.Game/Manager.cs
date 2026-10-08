@@ -48,6 +48,13 @@ namespace SAM.Game
 
         private readonly BindingList<Stats.StatInfo> _Statistics = new();
 
+        // Achievement states ticked by the user but not stored yet, keyed by achievement id.
+        // Survives list rebuilds caused by filtering so pending changes are not lost.
+        private readonly Dictionary<string, bool> _PendingAchievementStates = new();
+
+        private int _SkippedAchievements;
+        private int _SkippedStats;
+
         private readonly API.Callbacks.UserStatsReceived _UserStatsReceivedCallback;
 
         //private API.Callback<APITypes.UserStatsStored> UserStatsStoredCallback;
@@ -173,8 +180,16 @@ namespace SAM.Game
 
         private static string TranslateError(int id) => id switch
         {
-            2 => "generic error -- this usually means you don't own the game",
-            _ => _($"{id}"),
+            1 => "ok",
+            2 => "generic failure -- this usually means you don't own the game",
+            3 => "no connection -- Steam is offline or unreachable",
+            5 => "logged out",
+            6 => "invalid account information",
+            15 => "timed out",
+            17 => "account not found",
+            19 => "Steam service unavailable",
+            20 => "not logged on to Steam",
+            _ => _($"error {id}"),
         };
 
         private static string GetLocalizedString(KeyValue kv, string language, string defaultValue)
@@ -216,7 +231,7 @@ namespace SAM.Game
                     return false;
                 }
             }
-            catch (Exception e)
+            catch (Exception)
             {
                 return false;
             }
@@ -356,7 +371,8 @@ namespace SAM.Game
 
                     default:
                     {
-                        throw new InvalidOperationException("invalid stat type");
+                        // Unknown stat type: skip it instead of aborting the whole schema.
+                        break;
                     }
                 }
             }
@@ -373,7 +389,24 @@ namespace SAM.Game
                 return;
             }
 
-            if (this.LoadUserGameStatsSchema() == false)
+            bool schemaLoaded;
+            try
+            {
+                schemaLoaded = this.LoadUserGameStatsSchema();
+            }
+            catch (Exception e)
+            {
+                this._GameStatusLabel.Text = "Failed to load schema: " + e.Message;
+                this.EnableInput();
+                MessageBox.Show(
+                    "Failed to load schema:\n" + e,
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+
+            if (schemaLoaded == false)
             {
                 this._GameStatusLabel.Text = "Failed to load schema.";
                 this.EnableInput();
@@ -412,15 +445,17 @@ namespace SAM.Game
                 return;
             }
 
-            this._GameStatusLabel.Text = $"Retrieved {this._AchievementListView.Items.Count} achievements and {this._StatisticsDataGridView.Rows.Count} statistics.";
+            var unavailable = this._SkippedAchievements + this._SkippedStats;
+            this._GameStatusLabel.Text =
+                $"Retrieved {this._AchievementListView.Items.Count} achievements and {this._StatisticsDataGridView.Rows.Count} statistics" +
+                (unavailable > 0
+                    ? $" ({this._SkippedAchievements} achievements and {this._SkippedStats} statistics unavailable)."
+                    : ".");
             this.EnableInput();
         }
 
         private void RefreshStats()
         {
-            this._AchievementListView.Items.Clear();
-            this._StatisticsDataGridView.Rows.Clear();
-
             var steamId = this._SteamClient.SteamUser.GetSteamId();
 
             // This still triggers the UserStatsReceived callback, in addition to the callresult.
@@ -428,9 +463,20 @@ namespace SAM.Game
             var callHandle = this._SteamClient.SteamUserStats.RequestUserStats(steamId);
             if (callHandle == API.CallHandle.Invalid)
             {
-                MessageBox.Show(this, "Failed.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(
+                    this,
+                    "Steam refused the request for the stats of this game.",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
                 return;
             }
+
+            // Only wipe the UI once the request has been accepted, so a failed request
+            // does not leave the window empty.
+            this._AchievementListView.Items.Clear();
+            this._StatisticsDataGridView.Rows.Clear();
+            this._PendingAchievementStates.Clear();
 
             this._GameStatusLabel.Text = "Retrieving stat information...";
             this.DisableInput();
@@ -445,94 +491,113 @@ namespace SAM.Game
                 : null;
 
             this._IsUpdatingAchievementList = true;
+            this._SkippedAchievements = 0;
+
+            // Drop queued icon downloads from the previous contents of the list; the
+            // items they targeted are about to be discarded.
+            this._IconQueue.Clear();
 
             this._AchievementListView.Items.Clear();
             this._AchievementListView.BeginUpdate();
             //this.Achievements.Clear();
 
-            bool wantLocked = this._DisplayLockedOnlyButton.Checked == true;
-            bool wantUnlocked = this._DisplayUnlockedOnlyButton.Checked == true;
-
-            foreach (var def in this._AchievementDefinitions)
+            try
             {
-                if (string.IsNullOrEmpty(def.Id) == true)
-                {
-                    continue;
-                }
+                bool wantLocked = this._DisplayLockedOnlyButton.Checked == true;
+                bool wantUnlocked = this._DisplayUnlockedOnlyButton.Checked == true;
 
-                if (this._SteamClient.SteamUserStats.GetAchievementAndUnlockTime(
-                    def.Id,
-                    out bool isAchieved,
-                    out var unlockTime) == false)
+                foreach (var def in this._AchievementDefinitions)
                 {
-                    continue;
-                }
-
-                bool wanted = (wantLocked == false && wantUnlocked == false) || isAchieved switch
-                {
-                    true => wantUnlocked,
-                    false => wantLocked,
-                };
-                if (wanted == false)
-                {
-                    continue;
-                }
-
-                if (textSearch != null)
-                {
-                    if (def.Name.IndexOf(textSearch, StringComparison.OrdinalIgnoreCase) < 0 &&
-                        def.Description.IndexOf(textSearch, StringComparison.OrdinalIgnoreCase) < 0)
+                    if (string.IsNullOrEmpty(def.Id) == true)
                     {
                         continue;
                     }
+
+                    if (this._SteamClient.SteamUserStats.GetAchievementAndUnlockTime(
+                        def.Id,
+                        out bool isAchieved,
+                        out var unlockTime) == false)
+                    {
+                        this._SkippedAchievements++;
+                        continue;
+                    }
+
+                    bool wanted = (wantLocked == false && wantUnlocked == false) || isAchieved switch
+                    {
+                        true => wantUnlocked,
+                        false => wantLocked,
+                    };
+                    if (wanted == false)
+                    {
+                        continue;
+                    }
+
+                    if (textSearch != null)
+                    {
+                        if (def.Name.IndexOf(textSearch, StringComparison.OrdinalIgnoreCase) < 0 &&
+                            def.Description.IndexOf(textSearch, StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            continue;
+                        }
+                    }
+
+                    // State ticked by the user but not stored yet wins over the cached state,
+                    // so filtering does not discard pending changes.
+                    bool checkedState = this._PendingAchievementStates.TryGetValue(def.Id, out var pendingState) == true
+                        ? pendingState
+                        : isAchieved;
+
+                    Stats.AchievementInfo info = new()
+                    {
+                        Id = def.Id,
+                        IsAchieved = isAchieved,
+                        UnlockTime = isAchieved == false
+                            ? null
+                            : unlockTime > 0
+                                ? DateTimeOffset.FromUnixTimeSeconds(unlockTime).LocalDateTime
+                                : DateTimeOffset.FromUnixTimeSeconds(0).LocalDateTime,
+                        IconNormal = string.IsNullOrEmpty(def.IconNormal) ? null : def.IconNormal,
+                        IconLocked = string.IsNullOrEmpty(def.IconLocked) ? def.IconNormal : def.IconLocked,
+                        Permission = def.Permission,
+                        Name = def.Name,
+                        Description = def.Description,
+                    };
+
+                    ListViewItem item = new()
+                    {
+                        Checked = checkedState,
+                        Tag = info,
+                        Text = info.Name,
+                        BackColor = (def.Permission & 3) == 0 ? Color.Black : Color.FromArgb(64, 0, 0),
+                    };
+
+                    info.Item = item;
+
+                    if (item.Text.StartsWith("#", StringComparison.InvariantCulture) == true)
+                    {
+                        item.Text = info.Id;
+                        item.SubItems.Add("");
+                    }
+                    else
+                    {
+                        item.SubItems.Add(info.Description);
+                    }
+
+                    item.SubItems.Add(info.UnlockTime.HasValue == true
+                        ? info.UnlockTime.Value.ToString("g")
+                        : "-");
+
+                    info.ImageIndex = 0;
+
+                    this.AddAchievementToIconQueue(info, false);
+                    this._AchievementListView.Items.Add(item);
                 }
-
-                Stats.AchievementInfo info = new()
-                {
-                    Id = def.Id,
-                    IsAchieved = isAchieved,
-                    UnlockTime = isAchieved == true && unlockTime > 0
-                        ? DateTimeOffset.FromUnixTimeSeconds(unlockTime).LocalDateTime
-                        : null,
-                    IconNormal = string.IsNullOrEmpty(def.IconNormal) ? null : def.IconNormal,
-                    IconLocked = string.IsNullOrEmpty(def.IconLocked) ? def.IconNormal : def.IconLocked,
-                    Permission = def.Permission,
-                    Name = def.Name,
-                    Description = def.Description,
-                };
-
-                ListViewItem item = new()
-                {
-                    Checked = isAchieved,
-                    Tag = info,
-                    Text = info.Name,
-                    BackColor = (def.Permission & 3) == 0 ? Color.Black : Color.FromArgb(64, 0, 0),
-                };
-
-                info.Item = item;
-
-                if (item.Text.StartsWith("#", StringComparison.InvariantCulture) == true)
-                {
-                    item.Text = info.Id;
-                    item.SubItems.Add("");
-                }
-                else
-                {
-                    item.SubItems.Add(info.Description);
-                }
-
-                item.SubItems.Add(info.UnlockTime.HasValue == true
-                    ? info.UnlockTime.Value.ToString()
-                    : "");
-
-                info.ImageIndex = 0;
-
-                this.AddAchievementToIconQueue(info, false);
-                this._AchievementListView.Items.Add(item);
             }
-
-            this._AchievementListView.EndUpdate();
-            this._IsUpdatingAchievementList = false;
+            finally
+            {
+                this._AchievementListView.EndUpdate();
+                this._IsUpdatingAchievementList = false;
+            }
 
             this.DownloadNextIcon();
         }
@@ -540,6 +605,7 @@ namespace SAM.Game
         private void GetStatistics()
         {
             this._Statistics.Clear();
+            this._SkippedStats = 0;
             foreach (var stat in this._StatDefinitions)
             {
                 if (string.IsNullOrEmpty(stat.Id) == true)
@@ -551,6 +617,7 @@ namespace SAM.Game
                 {
                     if (this._SteamClient.SteamUserStats.GetStatValue(intStat.Id, out int value) == false)
                     {
+                        this._SkippedStats++;
                         continue;
                     }
                     this._Statistics.Add(new Stats.IntStatInfo()
@@ -567,6 +634,7 @@ namespace SAM.Game
                 {
                     if (this._SteamClient.SteamUserStats.GetStatValue(floatStat.Id, out float value) == false)
                     {
+                        this._SkippedStats++;
                         continue;
                     }
                     this._Statistics.Add(new Stats.FloatStatInfo()
@@ -609,7 +677,7 @@ namespace SAM.Game
                 return 0;
             }
 
-            List<Stats.AchievementInfo> achievements = new();
+            List<(Stats.AchievementInfo Info, bool Value)> pending = new();
             foreach (ListViewItem item in this._AchievementListView.Items)
             {
                 if (item.Tag is not Stats.AchievementInfo achievementInfo ||
@@ -618,30 +686,35 @@ namespace SAM.Game
                     continue;
                 }
 
-                achievementInfo.IsAchieved = item.Checked;
-                achievements.Add(achievementInfo);
+                pending.Add((achievementInfo, item.Checked));
             }
 
-            if (achievements.Count == 0)
+            if (pending.Count == 0)
             {
                 return 0;
             }
 
-            foreach (var info in achievements)
+            for (int i = 0; i < pending.Count; i++)
             {
-                if (this._SteamClient.SteamUserStats.SetAchievement(info.Id, info.IsAchieved) == false)
+                var (info, value) = pending[i];
+                if (this._SteamClient.SteamUserStats.SetAchievement(info.Id, value) == false)
                 {
                     MessageBox.Show(
                         this,
-                        $"An error occurred while setting the state for {info.Id}, aborting store.",
+                        $"An error occurred while setting the state for {info.Id}, aborting store.\n" +
+                        $"{pending.Count - i} change(s) have not been applied.",
                         "Error",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error);
                     return -1;
                 }
+
+                // Only update the model once Steam accepted the change, so a failure
+                // leaves the remaining changes detectable on the next attempt.
+                info.IsAchieved = value;
             }
 
-            return achievements.Count;
+            return pending.Count;
         }
 
         private int StoreStatistics()
@@ -713,8 +786,14 @@ namespace SAM.Game
         private void OnTimer(object sender, EventArgs e)
         {
             this._CallbackTimer.Enabled = false;
-            this._SteamClient.RunCallbacks(false);
-            this._CallbackTimer.Enabled = true;
+            try
+            {
+                this._SteamClient.RunCallbacks(false);
+            }
+            finally
+            {
+                this._CallbackTimer.Enabled = true;
+            }
         }
 
         private void OnRefresh(object sender, EventArgs e)
@@ -764,17 +843,31 @@ namespace SAM.Game
 
         private void OnStore(object sender, EventArgs e)
         {
+            // Flush an in-progress cell edit, otherwise its change is invisible to
+            // StoreStatistics() and the commit reports "0 statistics".
+            if (this._StatisticsDataGridView.IsCurrentCellInEditMode == true)
+            {
+                this._StatisticsDataGridView.EndEdit();
+                this._StatisticsDataGridView.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
+
             int achievements = this.StoreAchievements();
             if (achievements < 0)
             {
-                this.RefreshStats();
+                // Keep the list as-is: the changes that were not sent are still pending
+                // and can be retried after fixing the reported problem.
                 return;
             }
 
             int stats = this.StoreStatistics();
             if (stats < 0)
             {
-                this.RefreshStats();
+                return;
+            }
+
+            if (achievements == 0 && stats == 0)
+            {
+                this._GameStatusLabel.Text = "Nothing to store.";
                 return;
             }
 
@@ -783,6 +876,8 @@ namespace SAM.Game
                 this.RefreshStats();
                 return;
             }
+
+            this._PendingAchievementStates.Clear();
 
             MessageBox.Show(
                 this,
@@ -887,6 +982,19 @@ namespace SAM.Game
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
                 e.NewValue = e.CurrentValue;
+                return;
+            }
+
+            // Remember the user's intent so rebuilding the list (filter/display change)
+            // does not discard it.
+            bool checkedState = e.NewValue == CheckState.Checked;
+            if (checkedState != info.IsAchieved)
+            {
+                this._PendingAchievementStates[info.Id] = checkedState;
+            }
+            else
+            {
+                this._PendingAchievementStates.Remove(info.Id);
             }
         }
 

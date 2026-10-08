@@ -21,7 +21,9 @@
  */
 
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Windows.Forms;
 
 namespace SAM.Game
@@ -35,7 +37,24 @@ namespace SAM.Game
 
             if (args.Length == 0)
             {
-                Process.Start("SAM.Picker.exe");
+                try
+                {
+                    // Resolve the picker next to this executable instead of relying on
+                    // the current working directory.
+                    Process.Start(new ProcessStartInfo()
+                    {
+                        FileName = Path.Combine(AppContext.BaseDirectory, "SAM.Picker.exe"),
+                        UseShellExecute = true,
+                    });
+                }
+                catch (Exception e) when (e is Win32Exception or InvalidOperationException)
+                {
+                    MessageBox.Show(
+                        "Could not start SAM.Picker.exe:\n" + e.Message,
+                        "Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                }
                 return;
             }
 
@@ -97,10 +116,13 @@ namespace SAM.Game
                     }
                     return;
                 }
-                catch (DllNotFoundException)
+                catch (Exception e) when (e is DllNotFoundException
+                                             or BadImageFormatException
+                                             or EntryPointNotFoundException
+                                             or TypeInitializationException)
                 {
                     MessageBox.Show(
-                        "You've caused an exceptional error!",
+                        "Failed to load the Steam API:\n" + e.Message,
                         "Error",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error);
