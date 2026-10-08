@@ -21,6 +21,7 @@
  */
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
@@ -55,13 +56,25 @@ namespace SAM.Game
         private int _SkippedAchievements;
         private int _SkippedStats;
 
-        private readonly API.Callbacks.UserStatsReceived _UserStatsReceivedCallback;
+        // Set while StoreStats() is waiting for its confirmation callback (1102).
+        private bool _StorePending;
+        private string _StoreSummary;
+        private System.Windows.Forms.Timer _StoreTimeoutTimer;
 
-        //private API.Callback<APITypes.UserStatsStored> UserStatsStoredCallback;
+        private readonly API.Callbacks.UserStatsReceived _UserStatsReceivedCallback;
+        private readonly API.Callbacks.UserStatsStored _UserStatsStoredCallback;
 
         public Manager(long gameId, API.Client client)
         {
             this.InitializeComponent();
+
+            // Sorting is handled on ColumnClick (#495); the ListView otherwise only
+            // sorts by text when items are inserted.
+            this._AchievementSortColumn = 0;
+            this._AchievementSortOrder = SortOrder.Ascending;
+            this._AchievementListView.Sorting = SortOrder.None;
+            this._AchievementListView.ListViewItemSorter = new AchievementComparer(this);
+            this._AchievementListView.ColumnClick += this.OnAchievementColumnClick;
 
             this._MainTabControl.SelectedTab = this._AchievementsTabPage;
             //this.statisticsList.Enabled = this.checkBox1.Checked;
@@ -108,7 +121,14 @@ namespace SAM.Game
             this._UserStatsReceivedCallback = client.CreateAndRegisterCallback<API.Callbacks.UserStatsReceived>();
             this._UserStatsReceivedCallback.OnRun += this.OnUserStatsReceived;
 
-            //this.UserStatsStoredCallback = new API.Callback(1102, new API.Callback.CallbackFunction(this.OnUserStatsStored));
+            this._UserStatsStoredCallback = client.CreateAndRegisterCallback<API.Callbacks.UserStatsStored>();
+            this._UserStatsStoredCallback.OnRun += this.OnUserStatsStored;
+
+            this._StoreTimeoutTimer = new System.Windows.Forms.Timer(this.components)
+            {
+                Interval = 15000,
+            };
+            this._StoreTimeoutTimer.Tick += this.OnStoreTimeout;
 
             this.RefreshStats();
         }
@@ -478,6 +498,7 @@ namespace SAM.Game
                     "Error",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+                this.EnableInput();
                 return;
             }
 
@@ -492,6 +513,72 @@ namespace SAM.Game
         }
 
         private bool _IsUpdatingAchievementList;
+        private int _AchievementSortColumn;
+        private SortOrder _AchievementSortOrder;
+
+        private void OnAchievementColumnClick(object sender, ColumnClickEventArgs e)
+        {
+            if (e.Column == this._AchievementSortColumn)
+            {
+                this._AchievementSortOrder = this._AchievementSortOrder == SortOrder.Ascending
+                    ? SortOrder.Descending
+                    : SortOrder.Ascending;
+            }
+            else
+            {
+                this._AchievementSortColumn = e.Column;
+                this._AchievementSortOrder = SortOrder.Ascending;
+            }
+
+            this._AchievementListView.Sort();
+        }
+
+        private sealed class AchievementComparer : IComparer
+        {
+            private readonly Manager _Owner;
+
+            public AchievementComparer(Manager owner)
+            {
+                this._Owner = owner;
+            }
+
+            public int Compare(object x, object y)
+            {
+                if (x is not ListViewItem left || y is not ListViewItem right)
+                {
+                    return 0;
+                }
+
+                int result;
+                if (this._Owner._AchievementSortColumn == 2)
+                {
+                    // Unlock time: sort chronologically, never-unlocked entries first.
+                    var leftTime = left.Tag is Stats.AchievementInfo leftInfo ? leftInfo.UnlockTime : null;
+                    var rightTime = right.Tag is Stats.AchievementInfo rightInfo ? rightInfo.UnlockTime : null;
+                    result = (leftTime, rightTime) switch
+                    {
+                        (null, null) => 0,
+                        (null, _) => -1,
+                        (_, null) => 1,
+                        _ => leftTime.Value.CompareTo(rightTime.Value),
+                    };
+                }
+                else
+                {
+                    var column = this._Owner._AchievementSortColumn;
+                    string leftText = left.SubItems.Count > column ? left.SubItems[column].Text : "";
+                    string rightText = right.SubItems.Count > column ? right.SubItems[column].Text : "";
+                    result = string.Compare(leftText, rightText, StringComparison.CurrentCultureIgnoreCase);
+                }
+
+                if (result == 0)
+                {
+                    result = string.Compare(left.Text, right.Text, StringComparison.CurrentCultureIgnoreCase);
+                }
+
+                return this._Owner._AchievementSortOrder == SortOrder.Descending ? -result : result;
+            }
+        }
 
         private void GetAchievements()
         {
@@ -607,6 +694,8 @@ namespace SAM.Game
                 this._AchievementListView.EndUpdate();
                 this._IsUpdatingAchievementList = false;
             }
+
+            this._AchievementListView.Sort();
 
             this.DownloadNextIcon();
         }
@@ -896,12 +985,74 @@ namespace SAM.Game
 
             this._PendingAchievementStates.Clear();
 
+            // StoreStats() only queues the upload: the outcome arrives through the
+            // UserStatsStored (1102) callback. Reporting success and refreshing right
+            // away raced the upload and made committed achievements look reverted
+            // (#405, #458, #429, #599).
+            this._StoreSummary = $"Stored {achievements} achievements and {stats} statistics.";
+            this._StorePending = true;
+            this.DisableInput();
+            this._GameStatusLabel.Text = "Sending changes to Steam...";
+            this._StoreTimeoutTimer.Start();
+        }
+
+        private void OnUserStatsStored(APITypes.UserStatsStored param)
+        {
+            if (this._StorePending == false)
+            {
+                return;
+            }
+
+            this._StorePending = false;
+            this._StoreTimeoutTimer.Stop();
+
+            string summary = this._StoreSummary;
+            this._StoreSummary = null;
+
+            if (param.Result == 1)
+            {
+                this._GameStatusLabel.Text = summary;
+                MessageBox.Show(
+                    this,
+                    summary,
+                    "Information",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            else
+            {
+                var message = "Steam rejected the changes: " + TranslateError(param.Result);
+                this._GameStatusLabel.Text = message;
+                MessageBox.Show(
+                    this,
+                    message + "\n\nThe list will be refreshed with the values accepted by Steam.",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+
+            this.RefreshStats();
+        }
+
+        private void OnStoreTimeout(object sender, EventArgs e)
+        {
+            if (this._StorePending == false)
+            {
+                return;
+            }
+
+            this._StorePending = false;
+            this._StoreTimeoutTimer.Stop();
+            this._StoreSummary = null;
+
             MessageBox.Show(
                 this,
-                $"Stored {achievements} achievements and {stats} statistics.",
-                "Information",
+                "Steam did not confirm the changes within 15 seconds.\n" +
+                "They may still be applied; the list will be refreshed.",
+                "Warning",
                 MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+                MessageBoxIcon.Warning);
+
             this.RefreshStats();
         }
 
