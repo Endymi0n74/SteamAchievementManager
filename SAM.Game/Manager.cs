@@ -64,9 +64,17 @@ namespace SAM.Game
         private readonly API.Callbacks.UserStatsReceived _UserStatsReceivedCallback;
         private readonly API.Callbacks.UserStatsStored _UserStatsStoredCallback;
 
+        // Display language override (#531). Null = follow the language Steam reports
+        // for this game, which is not necessarily the language of the Steam client.
+        private string _DisplayLanguage;
+        private string _DefaultLanguage;
+        private readonly List<string> _SchemaLanguages = new();
+        private ToolStripComboBox _LanguageComboBox;
+
         public Manager(long gameId, API.Client client)
         {
             this.InitializeComponent();
+            this.SetupLanguageSelector();
 
             // Sorting is handled on ColumnClick (#495); the ListView otherwise only
             // sorts by text when items are inserted.
@@ -268,6 +276,18 @@ namespace SAM.Game
             }
 
             var currentLanguage = this._SteamClient.SteamApps008.GetCurrentGameLanguage();
+            if (string.IsNullOrEmpty(currentLanguage) == true)
+            {
+                currentLanguage = "english";
+            }
+
+            this._DefaultLanguage = currentLanguage;
+            this._SchemaLanguages.Clear();
+
+            // Steam's per-game language wins unless the user picked one in the toolbar;
+            // the schema may not carry that language, in which case GetLocalizedString
+            // falls back to English (#531).
+            var displayLanguage = this._DisplayLanguage ?? currentLanguage;
 
             this._AchievementDefinitions.Clear();
             this._StatDefinitions.Clear();
@@ -321,7 +341,8 @@ namespace SAM.Game
                     case APITypes.UserStatType.Integer:
                     {
                         var id = stat["name"].AsString("");
-                        string name = GetLocalizedString(stat["display"]["name"], currentLanguage, id);
+                        this.CollectLanguages(stat["display"]["name"]);
+                        string name = GetLocalizedString(stat["display"]["name"], displayLanguage, id);
 
                         this._StatDefinitions.Add(new Stats.IntegerStatDefinition()
                         {
@@ -344,7 +365,8 @@ namespace SAM.Game
                     case APITypes.UserStatType.AverageRate:
                     {
                         var id = stat["name"].AsString("");
-                        string name = GetLocalizedString(stat["display"]["name"], currentLanguage, id);
+                        this.CollectLanguages(stat["display"]["name"]);
+                        string name = GetLocalizedString(stat["display"]["name"], displayLanguage, id);
 
                         this._StatDefinitions.Add(new Stats.FloatStatDefinition()
                         {
@@ -378,8 +400,10 @@ namespace SAM.Game
                                 foreach (var bit in bits.Children)
                                 {
                                     string id = bit["name"].AsString("");
-                                    string name = GetLocalizedString(bit["display"]["name"], currentLanguage, id);
-                                    string desc = GetLocalizedString(bit["display"]["desc"], currentLanguage, "");
+                                    this.CollectLanguages(bit["display"]["name"]);
+                                    this.CollectLanguages(bit["display"]["desc"]);
+                                    string name = GetLocalizedString(bit["display"]["name"], displayLanguage, id);
+                                    string desc = GetLocalizedString(bit["display"]["desc"], displayLanguage, "");
 
                                     this._AchievementDefinitions.Add(new()
                                     {
@@ -406,7 +430,150 @@ namespace SAM.Game
                 }
             }
 
+            this._SchemaLanguages.Sort(StringComparer.CurrentCultureIgnoreCase);
+            this.UpdateLanguageSelector();
+
             return true;
+        }
+
+        private static readonly HashSet<string> _KnownLanguages = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // https://partner.steamgames.com/doc/store/localization/languages
+            "brazilian", "bulgarian", "czech", "danish", "dutch", "english", "finnish",
+            "french", "german", "greek", "hungarian", "italian", "japanese", "koreana",
+            "norwegian", "polish", "portuguese", "romanian", "russian", "schinese",
+            "spanish", "swedish", "tchinese", "thai", "turkish", "ukrainian", "vietnamese",
+        };
+
+        private void CollectLanguages(KeyValue displayName)
+        {
+            if (displayName.Valid == false || displayName.Children == null)
+            {
+                return;
+            }
+
+            foreach (var child in displayName.Children)
+            {
+                if (child.Valid == false || string.IsNullOrEmpty(child.Name) == true)
+                {
+                    continue;
+                }
+
+                // The schema also carries non-language keys under display nodes
+                // (e.g. "token"), which must not end up as a language choice.
+                if (_KnownLanguages.Contains(child.Name) == false)
+                {
+                    continue;
+                }
+
+                if (this._SchemaLanguages.Contains(child.Name) == false)
+                {
+                    this._SchemaLanguages.Add(child.Name);
+                }
+            }
+        }
+
+        private void SetupLanguageSelector()
+        {
+            this._LanguageComboBox = new ToolStripComboBox()
+            {
+                Name = "_LanguageComboBox",
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                AutoSize = false,
+                Width = 130,
+                ToolTipText = "Language used to display achievements and statistics.",
+            };
+            this._LanguageComboBox.SelectedIndexChanged += this.OnLanguageChanged;
+
+            this._MainToolStrip.Items.Insert(0, new ToolStripLabel("Language:"));
+            this._MainToolStrip.Items.Insert(1, this._LanguageComboBox);
+        }
+
+        private void UpdateLanguageSelector()
+        {
+            if (this._LanguageComboBox == null)
+            {
+                return;
+            }
+
+            this._LanguageComboBox.SelectedIndexChanged -= this.OnLanguageChanged;
+            try
+            {
+                this._LanguageComboBox.Items.Clear();
+                this._LanguageComboBox.Items.Add(
+                    "Automatic (" + (this._DefaultLanguage ?? "english") + ")");
+                foreach (var language in this._SchemaLanguages)
+                {
+                    this._LanguageComboBox.Items.Add(language);
+                }
+
+                int index = 0;
+                if (this._DisplayLanguage != null)
+                {
+                    int found = this._SchemaLanguages.IndexOf(this._DisplayLanguage);
+                    if (found >= 0)
+                    {
+                        index = found + 1;
+                    }
+                    else
+                    {
+                        // The override is no longer offered by this schema.
+                        this._DisplayLanguage = null;
+                    }
+                }
+
+                this._LanguageComboBox.SelectedIndex = index;
+            }
+            finally
+            {
+                this._LanguageComboBox.SelectedIndexChanged += this.OnLanguageChanged;
+            }
+        }
+
+        private void OnLanguageChanged(object sender, EventArgs e)
+        {
+            string selected = this._LanguageComboBox.SelectedIndex <= 0
+                ? null
+                : (string)this._LanguageComboBox.Items[this._LanguageComboBox.SelectedIndex];
+
+            if (selected == this._DisplayLanguage)
+            {
+                return;
+            }
+
+            this._DisplayLanguage = selected;
+
+            bool schemaLoaded;
+            try
+            {
+                schemaLoaded = this.LoadUserGameStatsSchema();
+            }
+            catch (Exception exception)
+            {
+                this._GameStatusLabel.Text = "Failed to load schema: " + exception.Message;
+                return;
+            }
+
+            if (schemaLoaded == false)
+            {
+                this._GameStatusLabel.Text = "Failed to load schema.";
+                return;
+            }
+
+            this.GetAchievements();
+            this.GetStatistics();
+            this._GameStatusLabel.Text = this.BuildRetrievedStatus();
+        }
+
+        private string BuildRetrievedStatus()
+        {
+            var unavailable = this._SkippedAchievements + this._SkippedStats;
+            return
+                $"Retrieved {this._AchievementListView.Items.Count} achievements and {this._StatisticsDataGridView.Rows.Count} statistics" +
+                (unavailable > 0
+                    ? $" ({this._SkippedAchievements} achievements and {this._SkippedStats} statistics unavailable)"
+                    : "") +
+                $", language: {this._DisplayLanguage ?? this._DefaultLanguage}.";
         }
 
         private void OnUserStatsReceived(APITypes.UserStatsReceived param)
@@ -474,12 +641,7 @@ namespace SAM.Game
                 return;
             }
 
-            var unavailable = this._SkippedAchievements + this._SkippedStats;
-            this._GameStatusLabel.Text =
-                $"Retrieved {this._AchievementListView.Items.Count} achievements and {this._StatisticsDataGridView.Rows.Count} statistics" +
-                (unavailable > 0
-                    ? $" ({this._SkippedAchievements} achievements and {this._SkippedStats} statistics unavailable)."
-                    : ".");
+            this._GameStatusLabel.Text = this.BuildRetrievedStatus();
             this.EnableInput();
         }
 
