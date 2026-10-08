@@ -178,9 +178,14 @@ namespace SAM.Game
                 info);
         }
 
-        private static string TranslateError(int id) => id switch
+        private static string DescribeConstraintsSuffix(Stats.StatInfo stat)
         {
-            1 => "ok",
+            var constraints = stat.DescribeConstraints();
+            return string.IsNullOrEmpty(constraints) == false ? $" [{constraints}]" : "";
+        }
+
+        private static string TranslateError(int id) => id switch
+        {            1 => "ok",
             2 => "generic failure -- this usually means you don't own the game",
             3 => "no connection -- Steam is offline or unreachable",
             5 => "logged out",
@@ -304,7 +309,9 @@ namespace SAM.Game
                             DisplayName = name,
                             MinValue = stat["min"].AsInteger(int.MinValue),
                             MaxValue = stat["max"].AsInteger(int.MaxValue),
-                            MaxChange = stat["maxchange"].AsInteger(0),
+                            MaxChange = stat["maxchange"].Valid == true
+                                ? stat["maxchange"].AsInteger(0)
+                                : (int?)null,
                             IncrementOnly = stat["incrementonly"].AsBoolean(false),
                             SetByTrustedGameServer = stat["bSetByTrustedGS"].AsBoolean(false),
                             DefaultValue = stat["default"].AsInteger(0),
@@ -325,7 +332,9 @@ namespace SAM.Game
                             DisplayName = name,
                             MinValue = stat["min"].AsFloat(float.MinValue),
                             MaxValue = stat["max"].AsFloat(float.MaxValue),
-                            MaxChange = stat["maxchange"].AsFloat(0.0f),
+                            MaxChange = stat["maxchange"].Valid == true
+                                ? stat["maxchange"].AsFloat(0.0f)
+                                : (float?)null,
                             IncrementOnly = stat["incrementonly"].AsBoolean(false),
                             DefaultValue = stat["default"].AsFloat(0.0f),
                             Permission = stat["permission"].AsInteger(0),
@@ -628,6 +637,9 @@ namespace SAM.Game
                         OriginalValue = value,
                         IsIncrementOnly = intStat.IncrementOnly,
                         Permission = intStat.Permission,
+                        MinValue = intStat.MinValue,
+                        MaxValue = intStat.MaxValue,
+                        MaxChange = intStat.MaxChange,
                     });
                 }
                 else if (stat is Stats.FloatStatDefinition floatStat)
@@ -645,6 +657,9 @@ namespace SAM.Game
                         OriginalValue = value,
                         IsIncrementOnly = floatStat.IncrementOnly,
                         Permission = floatStat.Permission,
+                        MinValue = floatStat.MinValue,
+                        MaxValue = floatStat.MaxValue,
+                        MaxChange = floatStat.MaxChange,
                     });
                 }
             }
@@ -740,7 +755,8 @@ namespace SAM.Game
                     {
                         MessageBox.Show(
                             this,
-                            $"An error occurred while setting the value for {stat.Id}, aborting store.",
+                            $"An error occurred while setting the value for {stat.Id}{DescribeConstraintsSuffix(stat)}, aborting store.\n" +
+                            "The other pending changes are kept, you can fix the value and retry.",
                             "Error",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Error);
@@ -755,7 +771,8 @@ namespace SAM.Game
                     {
                         MessageBox.Show(
                             this,
-                            $"An error occurred while setting the value for {stat.Id}, aborting store.",
+                            $"An error occurred while setting the value for {stat.Id}{DescribeConstraintsSuffix(stat)}, aborting store.\n" +
+                            "The other pending changes are kept, you can fix the value and retry.",
                             "Error",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Error);
@@ -901,6 +918,12 @@ namespace SAM.Game
                 e.ThrowException = false;
                 e.Cancel = true;
                 view.Rows[e.RowIndex].ErrorText = "Stat is protected! -- you can't modify it";
+            }
+            else if (e.Exception is Stats.StatConstraintException constraint)
+            {
+                e.ThrowException = false;
+                e.Cancel = true;
+                view.Rows[e.RowIndex].ErrorText = constraint.Message;
             }
             else
             {

@@ -1,4 +1,4 @@
-﻿/* Copyright (c) 2024 Rick (rick 'at' gibbed 'dot' us)
+/* Copyright (c) 2024 Rick (rick 'at' gibbed 'dot' us)
  *
  * This software is provided 'as-is', without any express or implied
  * warranty. In no event will the authors be held liable for any damages
@@ -20,17 +20,35 @@
  *    distribution.
  */
 
+using System;
+using System.Runtime.Serialization;
+
 namespace SAM.Game.Stats
 {
-    internal class IntegerStatDefinition : StatDefinition
+    /// <summary>
+    /// Thrown when a proposed stat value violates a constraint declared in the
+    /// game's stats schema (range, increment-only, max change per store).
+    /// </summary>
+    [Serializable]
+    internal class StatConstraintException : Exception
     {
-        public int MinValue;
-        public int MaxValue;
+        public StatConstraintException()
+        {
+        }
 
-        /// <summary>Maximum delta per store, or null when the schema has no maxchange.</summary>
-        public int? MaxChange;
-        public bool IncrementOnly;
-        public bool SetByTrustedGameServer;
-        public int DefaultValue;
+        public StatConstraintException(string message)
+            : base(message)
+        {
+        }
+
+        public StatConstraintException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+
+        protected StatConstraintException(SerializationInfo info, StreamingContext context)
+            : base(info, context)
+        {
+        }
     }
 }

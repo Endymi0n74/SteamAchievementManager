@@ -31,6 +31,15 @@ namespace SAM.Game.Stats
         public bool IsIncrementOnly { get; set; }
         public int Permission { get; set; }
 
+        /// <summary>
+        /// Human readable description of the schema constraints of this stat,
+        /// or an empty string when there are none to report.
+        /// </summary>
+        public virtual string DescribeConstraints()
+        {
+            return "";
+        }
+
         public string Extra
         {
             get

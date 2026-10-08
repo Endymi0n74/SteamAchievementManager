@@ -20,12 +20,18 @@
  *    distribution.
  */
 
+using System.Collections.Generic;
+
 namespace SAM.Game.Stats
 {
     internal class FloatStatInfo : StatInfo
     {
         public float OriginalValue;
         public float FloatValue;
+
+        public float MinValue = float.MinValue;
+        public float MaxValue = float.MaxValue;
+        public float? MaxChange;
 
         public override object Value
         {
@@ -38,10 +44,44 @@ namespace SAM.Game.Stats
                 {
                     throw new StatIsProtectedException();
                 }
+                if (this.IsIncrementOnly == true && f < this.FloatValue)
+                {
+                    throw new StatConstraintException(
+                        $"increment only: the value can only go up (currently {this.FloatValue})");
+                }
+                if (f < this.MinValue || f > this.MaxValue)
+                {
+                    throw new StatConstraintException(
+                        $"outside the allowed range {this.MinValue}..{this.MaxValue}");
+                }
+                if (this.MaxChange.HasValue == true &&
+                    System.Math.Abs((double)f - this.FloatValue) > this.MaxChange.Value)
+                {
+                    throw new StatConstraintException(
+                        $"the schema allows changing by at most {this.MaxChange.Value} at a time");
+                }
                 this.FloatValue = f;
             }
         }
 
         public override bool IsModified => this.FloatValue.Equals(this.OriginalValue) == false;
+
+        public override string DescribeConstraints()
+        {
+            var parts = new List<string>();
+            if (this.IsIncrementOnly == true)
+            {
+                parts.Add("increment only");
+            }
+            if (this.MinValue != float.MinValue || this.MaxValue != float.MaxValue)
+            {
+                parts.Add($"range {this.MinValue}..{this.MaxValue}");
+            }
+            if (this.MaxChange.HasValue == true)
+            {
+                parts.Add($"max change {this.MaxChange.Value}");
+            }
+            return string.Join(", ", parts);
+        }
     }
 }
