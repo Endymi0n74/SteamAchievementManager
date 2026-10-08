@@ -30,6 +30,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml.XPath;
 using static SAM.Picker.InvariantShorthand;
@@ -51,6 +52,12 @@ namespace SAM.Picker
 
         private readonly API.Callbacks.AppDataChanged _AppDataChangedCallback;
 
+        /// <summary>
+        /// True while an update check or an install is running, so the automatic
+        /// startup check and the toolbar button cannot overlap.
+        /// </summary>
+        private bool _UpdateCheckRunning;
+
         public GamePicker(API.Client client)
         {
             this._Games = new();
@@ -61,6 +68,14 @@ namespace SAM.Picker
             this._LogoQueue = new();
 
             this.InitializeComponent();
+
+            // Keep the title in step with the assembly version instead of a
+            // hard coded string that goes stale on every release.
+            this.Text =
+                $"Steam Achievement Manager {UpdateChecker.CurrentVersion.ToString(3)} | " +
+                "Pick a game... Any game...";
+
+            this.Shown += this.OnShownForUpdates;
 
             Bitmap blank = new(this._LogoImageList.ImageSize.Width, this._LogoImageList.ImageSize.Height);
             using (var g = Graphics.FromImage(blank))
@@ -175,7 +190,7 @@ namespace SAM.Picker
             }
         }
 
-        private static WebClient CreateDownloader()
+        internal static WebClient CreateDownloader()
         {
             // Older machine defaults can still be SSL3/TLS1.0.
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
@@ -199,6 +214,170 @@ namespace SAM.Picker
             }
 
             this._PickerStatusLabel.Text = text;
+        }
+
+        private void OnShownForUpdates(object sender, EventArgs e)
+        {
+            // Silent background check: anything that goes wrong (offline, rate
+            // limited, no release published yet) is ignored unless the user
+            // pressed the button.
+            this.CheckForUpdates(manual: false);
+        }
+
+        private void OnCheckForUpdates(object sender, EventArgs e)
+        {
+            this.CheckForUpdates(manual: true);
+        }
+
+        private void CheckForUpdates(bool manual)
+        {
+            if (this._UpdateCheckRunning == true)
+            {
+                if (manual == true)
+                {
+                    this.SetStatusText("An update check is already running.");
+                }
+                return;
+            }
+
+            this._UpdateCheckRunning = true;
+            if (manual == true)
+            {
+                this.SetStatusText("Checking for updates...");
+            }
+
+            Task.Run(() =>
+            {
+                UpdateCheckResult result;
+                try
+                {
+                    result = UpdateChecker.Check();
+                }
+                catch (Exception e)
+                {
+                    result = new UpdateCheckResult() { Error = e.Message };
+                }
+
+                this.RunOnUiThread(() => this.OnUpdateCheckCompleted(result, manual));
+            });
+        }
+
+        private void OnUpdateCheckCompleted(UpdateCheckResult result, bool manual)
+        {
+            this._UpdateCheckRunning = false;
+
+            if (string.IsNullOrEmpty(result.Error) == false)
+            {
+                if (manual == false)
+                {
+                    return;
+                }
+
+                this.SetStatusText("");
+                MessageBox.Show(
+                    this,
+                    "Could not check for updates.\n\n(" + result.Error + ")",
+                    "Update",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (result.Update == null)
+            {
+                if (manual == false)
+                {
+                    return;
+                }
+
+                this.SetStatusText("");
+                MessageBox.Show(
+                    this,
+                    $"Steam Achievement Manager is up to date (version {UpdateChecker.CurrentVersion.ToString(3)}).",
+                    "Update",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            var info = result.Update;
+            var answer = MessageBox.Show(
+                this,
+                $"A new version is available: {info.Tag} (you are running " +
+                $"{UpdateChecker.CurrentVersion.ToString(3)}).\n\n" +
+                "Download and install it now?\n\n" +
+                "SAM will close, replace its own files and restart.\n" +
+                "Nothing in Steam (achievements or statistics) is touched.",
+                "Update available",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information);
+
+            if (answer == DialogResult.No)
+            {
+                if (manual == true)
+                {
+                    this.SetStatusText("");
+                }
+                return;
+            }
+
+            this.ApplyUpdate(info);
+        }
+
+        private void ApplyUpdate(UpdateInfo info)
+        {
+            if (this._UpdateCheckRunning == true)
+            {
+                return;
+            }
+
+            this._UpdateCheckRunning = true;
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    UpdateChecker.DownloadAndApply(info, this.SetStatusText);
+
+                    this.RunOnUiThread(() =>
+                    {
+                        this.SetStatusText("Update installed. Restarting...");
+                        Application.Exit();
+                    });
+                }
+                catch (Exception e)
+                {
+                    this.RunOnUiThread(() =>
+                    {
+                        this._UpdateCheckRunning = false;
+                        this.SetStatusText("Update failed.");
+                        MessageBox.Show(
+                            this,
+                            "Could not install the update.\n\n(" + e.Message + ")",
+                            "Update",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error);
+                    });
+                }
+            });
+        }
+
+        private void RunOnUiThread(Action action)
+        {
+            try
+            {
+                if (this.IsDisposed == true || this.IsHandleCreated == false)
+                {
+                    return;
+                }
+
+                this.BeginInvoke(action);
+            }
+            catch (InvalidOperationException)
+            {
+                // The window went away between the check and the post
+                // (ObjectDisposedException derives from this).
+            }
         }
 
         /// <param name="selectFirst">

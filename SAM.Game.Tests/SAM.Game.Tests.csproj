@@ -18,6 +18,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\SAM.Picker\SAM.Picker.csproj" AdditionalProperties="Platform=x86" />
     <ProjectReference Include="..\SAM.Game\SAM.Game.csproj" AdditionalProperties="Platform=x86" />
     <!-- Transitive: the test assembly must load SAM.API next to SAM.Game, and it
          only compiles when built for x86 like the rest of the solution. -->
