@@ -24,6 +24,7 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace SAM.Game
@@ -34,6 +35,12 @@ namespace SAM.Game
         public static void Main(string[] args)
         {
             long appId;
+
+            // Without these, any unexpected exception ends the process silently:
+            // "SAM won't open" (#491/#435/#424).
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += OnUnhandledException;
+            AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
 
             if (args.Length == 0)
             {
@@ -133,6 +140,25 @@ namespace SAM.Game
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new Manager(appId, client));
             }
+        }
+
+        private static void OnUnhandledException(object sender, ThreadExceptionEventArgs e)
+        {
+            ShowUnhandledException(e.Exception);
+        }
+
+        private static void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            ShowUnhandledException(e.ExceptionObject as Exception);
+        }
+
+        private static void ShowUnhandledException(Exception exception)
+        {
+            MessageBox.Show(
+                "An unexpected error occurred:\n\n" + (exception?.ToString() ?? "unknown error"),
+                "Steam Achievement Manager",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿/* Copyright (c) 2024 Rick (rick 'at' gibbed 'dot' us)
+/* Copyright (c) 2024 Rick (rick 'at' gibbed 'dot' us)
  *
  * This software is provided 'as-is', without any express or implied
  * warranty. In no event will the authors be held liable for any damages
@@ -108,6 +108,10 @@ namespace SAM.API.Wrappers
                     user,
                     pipe,
                     nativeVersion.Handle);
+                if (address == IntPtr.Zero)
+                {
+                    return default(TClass);
+                }
                 TClass result = new();
                 result.SetupFunctions(address);
                 return result;
@@ -137,6 +141,10 @@ namespace SAM.API.Wrappers
                     user,
                     pipe,
                     nativeVersion.Handle);
+                if (address == IntPtr.Zero)
+                {
+                    return default(TClass);
+                }
                 TClass result = new();
                 result.SetupFunctions(address);
                 return result;
@@ -165,6 +173,10 @@ namespace SAM.API.Wrappers
                     this.ObjectAddress,
                     pipe,
                     nativeVersion.Handle);
+                if (address == IntPtr.Zero)
+                {
+                    return default(TClass);
+                }
                 TClass result = new();
                 result.SetupFunctions(address);
                 return result;
@@ -192,6 +204,10 @@ namespace SAM.API.Wrappers
                     user,
                     pipe,
                     nativeVersion.Handle);
+                if (address == IntPtr.Zero)
+                {
+                    return default(TClass);
+                }
                 TClass result = new();
                 result.SetupFunctions(address);
                 return result;

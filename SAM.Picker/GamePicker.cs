@@ -132,15 +132,59 @@ namespace SAM.Picker
 
         private void OnDownloadList(object sender, RunWorkerCompletedEventArgs e)
         {
-            if (e.Error != null || e.Cancelled == true)
+            if (e.Cancelled == true)
             {
                 this.AddDefaultGames();
-                MessageBox.Show(e.Error.ToString(), "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(
+                    this,
+                    "Downloading the game list was cancelled.",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            else if (e.Error != null)
+            {
+                this.AddDefaultGames();
+                MessageBox.Show(
+                    this,
+                    "Could not download the game list.\n" +
+                    "Check your network connection (and proxy settings, if any).\n\n" +
+                    "(" + e.Error.Message + ")",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
             }
 
             this.RefreshGames();
             this._RefreshGamesButton.Enabled = true;
+            this._AddGameButton.Enabled = true;
             this.DownloadNextLogo();
+        }
+
+        private static WebClient CreateDownloader()
+        {
+            // Older machine defaults can still be SSL3/TLS1.0.
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+
+            WebClient downloader = new();
+            if (WebRequest.DefaultWebProxy != null)
+            {
+                // Authenticated proxies otherwise fail with 407 (#466).
+                downloader.Proxy = WebRequest.DefaultWebProxy;
+                downloader.Proxy.Credentials = CredentialCache.DefaultNetworkCredentials;
+            }
+            return downloader;
+        }
+
+        private void SetStatusText(string text)
+        {
+            if (this._PickerStatusLabel.InvokeRequired == true)
+            {
+                this._PickerStatusLabel.BeginInvoke(new Action<string>(this.SetStatusText), text);
+                return;
+            }
+
+            this._PickerStatusLabel.Text = text;
         }
 
         private void RefreshGames()
