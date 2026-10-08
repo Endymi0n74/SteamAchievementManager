@@ -206,14 +206,15 @@ namespace SAM.Game
                 info);
         }
 
-        private static string DescribeConstraintsSuffix(Stats.StatInfo stat)
+        internal static string DescribeConstraintsSuffix(Stats.StatInfo stat)
         {
             var constraints = stat.DescribeConstraints();
             return string.IsNullOrEmpty(constraints) == false ? $" [{constraints}]" : "";
         }
 
-        private static string TranslateError(int id) => id switch
-        {            1 => "ok",
+        internal static string TranslateError(int id) => id switch
+        {
+            1 => "ok",
             2 => "generic failure -- this usually means you don't own the game",
             3 => "no connection -- Steam is offline or unreachable",
             5 => "logged out",

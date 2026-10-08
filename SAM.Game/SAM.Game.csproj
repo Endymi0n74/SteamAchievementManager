@@ -41,6 +41,10 @@
     <PackageReference Include="System.Resources.Extensions" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The unit tests assert on internal helpers (TranslateError, KeyValue, stats). -->
+    <InternalsVisibleTo Include="SAM.Game.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <Reference Include="System.Windows.Forms" />
   </ItemGroup>
   <ItemGroup>
