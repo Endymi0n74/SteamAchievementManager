@@ -109,8 +109,10 @@ dotnet test SAM.sln -c Release
 
 ## Scope of this fork
 
-- Fixes and features are developed and published **here**; nothing is proposed upstream
-  (no pull requests on `gibbed/SteamAchievementManager`).
+- Fixes and features are developed and published **here**; only three pull requests have
+  been proposed upstream: [#643](https://github.com/gibbed/SteamAchievementManager/pull/643)
+  (build and fixes), [#644](https://github.com/gibbed/SteamAchievementManager/pull/644)
+  (tests), [#645](https://github.com/gibbed/SteamAchievementManager/pull/645) (auto-update).
 - Version numbering follows the fork: **7.1.0** means “7.0.x plus the changes below”.
 - The window titles derive from the assembly version, so they can no longer go stale.
 

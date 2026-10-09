@@ -10,7 +10,13 @@ complément de [`README.md`](README.md) (anglais) et [`README.fr.md`](README.fr.
   Steam via le client local.
 - **Chemin** : `D:\Codex\SteamAchievementManager` — remotes : `origin` = **amont (jamais
   poussé)**, `fork` = `https://github.com/Endymi0n74/SteamAchievementManager` (tout y est
-  poussé, **aucune PR** n'est ouverte sur l'amont, choix assumé).
+  poussé ; **3 PR ouvertes sur l'amont** : **#643** build + correctifs, **#644** tests
+  xunit, **#645** auto-update — ouvertes le 2026-10-09, préparées par Kumo, agent de
+  vibecoding OpenCode, avec Endymi0n74 ; aucun suivi demandé).
+- **Statut** : ⏸ **Clos le 2026-10-09** — sujet terminé pour l'instant, à **ne pas
+  mélanger** avec les deux autres sujets du workspace : `D:\Codex\tsbak-gui` (**task-gui**)
+  et l'outillage **REA** (`D:\Codex\tools\memory.md`). Aucune dépendance ni logique
+  commune ; ne pas rouvrir sans demande explicite.
 - **Dernière version** : **7.1.0** (2026-10-09) — release GitHub `7.1.0`
   (`SteamAchievementManager-7.1.0.zip` + `.zip.sha256`), tag = `master` = `455a0cd`.
   Amont : 7.0.x.
