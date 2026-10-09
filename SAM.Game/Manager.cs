@@ -81,12 +81,6 @@ namespace SAM.Game
             this.InitializeComponent();
             this.SetupLanguageSelector();
 
-            // Keep the title in step with the assembly version instead of a
-            // hard coded string that goes stale on every release.
-            this.Text =
-                "Steam Achievement Manager " +
-                typeof(Manager).Assembly.GetName().Version.ToString(3);
-
             // Sorting is handled on ColumnClick (#495); the ListView otherwise only
             // sorts by text when items are inserted.
             this._AchievementSortColumn = 0;
@@ -150,21 +144,6 @@ namespace SAM.Game
             this._StoreTimeoutTimer.Tick += this.OnStoreTimeout;
 
             this.RefreshStats();
-        }
-
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            // Detach before disposing: an icon download still in flight would
-            // otherwise raise ObjectDisposedException from its completion
-            // handler while the window is closing.
-            this._IconDownloader.DownloadDataCompleted -= this.OnIconDownload;
-            if (this._IconDownloader.IsBusy == true)
-            {
-                this._IconDownloader.CancelAsync();
-            }
-
-            this._IconDownloader.Dispose();
-            base.OnFormClosing(e);
         }
 
         private void AddAchievementIcon(Stats.AchievementInfo info, Image icon)
@@ -250,15 +229,14 @@ namespace SAM.Game
                 info);
         }
 
-        internal static string DescribeConstraintsSuffix(Stats.StatInfo stat)
+        private static string DescribeConstraintsSuffix(Stats.StatInfo stat)
         {
             var constraints = stat.DescribeConstraints();
             return string.IsNullOrEmpty(constraints) == false ? $" [{constraints}]" : "";
         }
 
-        internal static string TranslateError(int id) => id switch
-        {
-            1 => "ok",
+        private static string TranslateError(int id) => id switch
+        {            1 => "ok",
             2 => "generic failure -- this usually means you don't own the game",
             3 => "no connection -- Steam is offline or unreachable",
             5 => "logged out",
