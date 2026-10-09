@@ -40,7 +40,7 @@ namespace SAM.Game
         private readonly long _GameId;
         private readonly API.Client _SteamClient;
 
-        private readonly WebClient _IconDownloader = new();
+        private readonly WebClient _IconDownloader = CreateIconDownloader();
 
         private readonly List<Stats.AchievementInfo> _IconQueue = new();
         private readonly List<Stats.StatDefinition> _StatDefinitions = new();
@@ -70,6 +70,11 @@ namespace SAM.Game
         private string _DefaultLanguage;
         private readonly List<string> _SchemaLanguages = new();
         private ToolStripComboBox _LanguageComboBox;
+
+        // Why LoadUserGameStatsSchema failed, so the UI can say something more
+        // useful than "Failed to load schema." (#593/#594/#625: half of the
+        // games show no achievement because the schema was never downloaded).
+        private string _SchemaFailureReason;
 
         public Manager(long gameId, API.Client client)
         {
@@ -175,6 +180,24 @@ namespace SAM.Game
             }
         }
 
+        private static WebClient CreateIconDownloader()
+        {
+            // Same treatment as the picker's downloader: older machine defaults
+            // can still negotiate SSL3/TLS1.0, and behind an authenticated proxy
+            // the icon downloads fail without the default credentials (#466),
+            // which used to show up as achievements without any icon.
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+
+            WebClient downloader = new();
+            if (WebRequest.DefaultWebProxy != null)
+            {
+                downloader.Proxy = WebRequest.DefaultWebProxy;
+                downloader.Proxy.Credentials = CredentialCache.DefaultNetworkCredentials;
+            }
+
+            return downloader;
+        }
+
         private void OnIconDownload(object sender, DownloadDataCompletedEventArgs e)
         {
             if (e.Error == null && e.Cancelled == false)
@@ -275,14 +298,21 @@ namespace SAM.Game
 
         private bool LoadUserGameStatsSchema()
         {
+            this._SchemaFailureReason = null;
+
             string path;
+            string fileName;
             try
             {
-                string fileName = _($"UserGameStatsSchema_{this._GameId}.bin");
+                fileName = _($"UserGameStatsSchema_{this._GameId}.bin");
                 path = API.Steam.GetInstallPath();
                 path = Path.Combine(path, "appcache", "stats", fileName);
                 if (File.Exists(path) == false)
                 {
+                    // Steam only fetches this file once the game has been run.
+                    this._SchemaFailureReason =
+                        $"{fileName} is not in Steam's appcache (appcache\\stats). " +
+                        "Launch the game once from Steam, then reopen this window.";
                     return false;
                 }
             }
@@ -294,6 +324,9 @@ namespace SAM.Game
             var kv = KeyValue.LoadAsBinary(path);
             if (kv == null)
             {
+                this._SchemaFailureReason =
+                    $"{fileName} could not be read (it may be incomplete or corrupt). " +
+                    "Deleting it and running the game again makes Steam rebuild it.";
                 return false;
             }
 
@@ -317,6 +350,8 @@ namespace SAM.Game
             var stats = kv[this._GameId.ToString(CultureInfo.InvariantCulture)]["stats"];
             if (stats.Valid == false || stats.Children == null)
             {
+                this._SchemaFailureReason =
+                    $"{fileName} does not contain the statistics for app {this._GameId}.";
                 return false;
             }
 
@@ -579,13 +614,20 @@ namespace SAM.Game
 
             if (schemaLoaded == false)
             {
-                this._GameStatusLabel.Text = "Failed to load schema.";
+                this._GameStatusLabel.Text = this.DescribeSchemaFailure();
                 return;
             }
 
             this.GetAchievements();
             this.GetStatistics();
             this._GameStatusLabel.Text = this.BuildRetrievedStatus();
+        }
+
+        private string DescribeSchemaFailure()
+        {
+            return string.IsNullOrEmpty(this._SchemaFailureReason) == false
+                ? "Failed to load schema: " + this._SchemaFailureReason
+                : "Failed to load schema.";
         }
 
         private string BuildRetrievedStatus()
@@ -627,7 +669,7 @@ namespace SAM.Game
 
             if (schemaLoaded == false)
             {
-                this._GameStatusLabel.Text = "Failed to load schema.";
+                this._GameStatusLabel.Text = this.DescribeSchemaFailure();
                 this.EnableInput();
                 return;
             }

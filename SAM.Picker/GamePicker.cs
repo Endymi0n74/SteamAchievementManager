@@ -178,6 +178,16 @@ namespace SAM.Picker
             this._RefreshGamesButton.Enabled = true;
             this._AddGameButton.Enabled = true;
             this.DownloadNextLogo();
+
+            // Ownership is decided by SteamApps008.IsSubscribedApp; when some
+            // other tool fakes licences, Steam claims ownership of the whole
+            // catalogue and the list becomes meaningless (#468/#410/#581/#592).
+            if (this._Games.Count > 5000)
+            {
+                this.SetStatusText(
+                    $"Steam reports {this._Games.Count} owned games, which no account realistically has: " +
+                    "something (a licence faking tool) is telling Steam that you own everything.");
+            }
         }
 
         internal static WebClient CreateDownloader()
