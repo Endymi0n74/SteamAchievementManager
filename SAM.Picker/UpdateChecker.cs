@@ -76,7 +76,7 @@ namespace SAM.Picker
     {
         // Releases published here are the ones this build will offer.
         // Point this at your own fork when cutting your own release.
-        internal const string ReleaseRepository = "Endymi0n74/SteamAchievementManager";
+        internal const string ReleaseRepository = "gibbed/SteamAchievementManager";
 
         private const string UserAgent = "SteamAchievementManager-Updater";
 
