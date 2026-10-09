@@ -380,7 +380,12 @@ namespace SAM.Picker
             }
         }
 
-        private void RefreshGames()
+        /// <param name="selectFirst">
+        /// True to pre-select the first game when nothing is selected. Kept false
+        /// while typing in the search box so the selection does not jump back to
+        /// the top after every key.
+        /// </param>
+        private void RefreshGames(bool selectFirst = true)
         {
             var nameSearch = this._SearchGameTextBox.Text.Length > 0
                 ? this._SearchGameTextBox.Text
@@ -427,14 +432,11 @@ namespace SAM.Picker
             this._PickerStatusLabel.Text =
                 $"Displaying {this._GameListView.Items.Count} games. Total {this._Games.Count} games.";
 
-            if (this._GameListView.Items.Count > 0)
+            if (selectFirst == true && this._GameListView.Items.Count > 0)
             {
-                // Only pre-select the first item when nothing is selected, so typing in
-                // the search box does not throw the selection back to the top every key.
-                if (this._GameListView.SelectedItems.Count == 0)
-                {
-                    this._GameListView.Items[0].Selected = true;
-                }
+                // SelectedItems cannot be queried in virtual mode (it throws);
+                // the decision to pre-select is therefore made by the caller.
+                this._GameListView.Items[0].Selected = true;
                 this._GameListView.Select();
             }
         }
@@ -808,7 +810,10 @@ namespace SAM.Picker
 
         private void OnFilterUpdate(object sender, EventArgs e)
         {
-            this.RefreshGames();
+            // The search box refreshes on every key: leave the selection alone and
+            // keep the focus in the box. A filter change selects the first game,
+            // like it always did.
+            this.RefreshGames(selectFirst: sender != this._SearchGameTextBox);
 
             // Compatibility with _GameListView SearchForVirtualItemEventHandler (otherwise _SearchGameTextBox loose focus on KeyUp)
             this._SearchGameTextBox.Focus();
