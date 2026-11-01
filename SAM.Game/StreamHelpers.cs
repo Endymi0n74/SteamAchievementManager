@@ -30,40 +30,59 @@ namespace SAM.Game
 {
     internal static class StreamHelpers
     {
+        // Shared by every fixed size read: a truncated schema has to fail loudly instead
+        // of quietly yielding zeroed bytes (Debug.Assert does nothing in Release).
+        private static void ReadExactly(Stream stream, byte[] data, int offset, int count)
+        {
+            while (count > 0)
+            {
+                int read = stream.Read(data, offset, count);
+                if (read <= 0)
+                {
+                    throw new EndOfStreamException("Unexpected end of stream.");
+                }
+
+                offset += read;
+                count -= read;
+            }
+        }
+
         public static byte ReadValueU8(this Stream stream)
         {
-            return (byte)stream.ReadByte();
+            int value = stream.ReadByte();
+            if (value < 0)
+            {
+                throw new EndOfStreamException("Unexpected end of stream.");
+            }
+
+            return (byte)value;
         }
 
         public static int ReadValueS32(this Stream stream)
         {
             var data = new byte[4];
-            int read = stream.Read(data, 0, 4);
-            Debug.Assert(read == 4);
+            ReadExactly(stream, data, 0, 4);
             return BitConverter.ToInt32(data, 0);
         }
 
         public static uint ReadValueU32(this Stream stream)
         {
             var data = new byte[4];
-            int read = stream.Read(data, 0, 4);
-            Debug.Assert(read == 4);
+            ReadExactly(stream, data, 0, 4);
             return BitConverter.ToUInt32(data, 0);
         }
 
         public static ulong ReadValueU64(this Stream stream)
         {
             var data = new byte[8];
-            int read = stream.Read(data, 0, 8);
-            Debug.Assert(read == 8);
+            ReadExactly(stream, data, 0, 8);
             return BitConverter.ToUInt64(data, 0);
         }
 
         public static float ReadValueF32(this Stream stream)
         {
             var data = new byte[4];
-            int read = stream.Read(data, 0, 4);
-            Debug.Assert(read == 4);
+            ReadExactly(stream, data, 0, 4);
             return BitConverter.ToSingle(data, 0);
         }
 
@@ -83,8 +102,7 @@ namespace SAM.Game
                     Array.Resize(ref data, data.Length + (128 * characterSize));
                 }
 
-                int read = stream.Read(data, i, characterSize);
-                Debug.Assert(read == characterSize);
+                ReadExactly(stream, data, i, characterSize);
 
                 if (encoding.GetString(data, i, characterSize) == characterEnd)
                 {

@@ -151,17 +151,9 @@ namespace SAM.Picker
 
         private void OnDownloadList(object sender, RunWorkerCompletedEventArgs e)
         {
-            if (e.Cancelled == true)
-            {
-                this.AddDefaultGames();
-                MessageBox.Show(
-                    this,
-                    "Downloading the game list was cancelled.",
-                    "Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-            }
-            else if (e.Error != null)
+            // Nothing calls CancelAsync(), so a cancelled result cannot happen and the
+            // branch that handled it could never run.
+            if (e.Error != null)
             {
                 this.AddDefaultGames();
                 MessageBox.Show(
@@ -677,21 +669,33 @@ namespace SAM.Picker
 
         private void AddGame(uint id, string type)
         {
-            // Runs on the download worker while the UI thread may read _Games.
+            // Runs on the download worker while the UI thread may read _Games. The Steam
+            // calls stay outside the lock: they run once per catalogue entry, and holding
+            // it there made the UI thread wait for thousands of native calls.
             lock (this._Games)
             {
                 if (this._Games.ContainsKey(id) == true)
                 {
                     return;
                 }
+            }
 
-                if (this.OwnsGame(id) == false)
+            if (this.OwnsGame(id) == false)
+            {
+                return;
+            }
+
+            GameInfo info = new(id, type);
+            info.Name = this._SteamClient.SteamApps001.GetAppData(info.Id, "name");
+
+            lock (this._Games)
+            {
+                // Nothing else adds games, but keep the check next to the write.
+                if (this._Games.ContainsKey(id) == true)
                 {
                     return;
                 }
 
-                GameInfo info = new(id, type);
-                info.Name = this._SteamClient.SteamApps001.GetAppData(info.Id, "name");
                 this._Games.Add(id, info);
             }
         }

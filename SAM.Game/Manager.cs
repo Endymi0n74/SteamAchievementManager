@@ -58,8 +58,21 @@ namespace SAM.Game
 
         // Set while StoreStats() is waiting for its confirmation callback (1102).
         private bool _StorePending;
+
+        // Set while RequestUserStats() is waiting for its callback (1101).
+        private bool _RetrievePending;
         private string _StoreSummary;
+
+        // Steam is expected to answer a request within this delay; the store confirmation
+        // and the initial stats retrieval share the same budget.
+        private const int ConfirmationTimeoutMilliseconds = 15000;
+
+        // The search box advertises "at least 3 characters"; below that the list stays
+        // whole instead of being rebuilt and re-queueing every icon on each keystroke.
+        private const int MinimumSearchLength = 3;
+
         private System.Windows.Forms.Timer _StoreTimeoutTimer;
+        private System.Windows.Forms.Timer _RetrieveTimeoutTimer;
 
         private readonly API.Callbacks.UserStatsReceived _UserStatsReceivedCallback;
         private readonly API.Callbacks.UserStatsStored _UserStatsStoredCallback;
@@ -145,9 +158,17 @@ namespace SAM.Game
 
             this._StoreTimeoutTimer = new System.Windows.Forms.Timer(this.components)
             {
-                Interval = 15000,
+                Interval = ConfirmationTimeoutMilliseconds,
             };
             this._StoreTimeoutTimer.Tick += this.OnStoreTimeout;
+
+            // Same budget for RequestUserStats: without it a Steam that never answers
+            // leaves the window stuck on "Retrieving stat information..." forever.
+            this._RetrieveTimeoutTimer = new System.Windows.Forms.Timer(this.components)
+            {
+                Interval = ConfirmationTimeoutMilliseconds,
+            };
+            this._RetrieveTimeoutTimer.Tick += this.OnRetrieveTimeout;
 
             this.RefreshStats();
         }
@@ -618,8 +639,25 @@ namespace SAM.Game
                 return;
             }
 
-            this.GetAchievements();
-            this.GetStatistics();
+            try
+            {
+                this.GetAchievements();
+                this.GetStatistics();
+            }
+            catch (Exception exception)
+            {
+                // Same protection as the UserStatsReceived path: a broken schema entry must
+                // not escape to the global handler just because the language changed.
+                this._GameStatusLabel.Text = "Error when handling the language change.";
+                MessageBox.Show(
+                    this,
+                    "Error when handling the language change:\n" + exception,
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+
             this._GameStatusLabel.Text = this.BuildRetrievedStatus();
         }
 
@@ -633,8 +671,13 @@ namespace SAM.Game
         private string BuildRetrievedStatus()
         {
             var unavailable = this._SkippedAchievements + this._SkippedStats;
+            // Count what was retrieved from Steam, not what the current filter happens to
+            // display: the achievement list is filtered and the statistics grid can carry
+            // a row of its own.
+            int achievements = this._AchievementDefinitions.Count - this._SkippedAchievements;
+            int statistics = this._Statistics.Count;
             return
-                $"Retrieved {this._AchievementListView.Items.Count} achievements and {this._StatisticsDataGridView.Rows.Count} statistics" +
+                $"Retrieved {achievements} achievements and {statistics} statistics" +
                 (unavailable > 0
                     ? $" ({this._SkippedAchievements} achievements and {this._SkippedStats} statistics unavailable)"
                     : "") +
@@ -643,6 +686,9 @@ namespace SAM.Game
 
         private void OnUserStatsReceived(APITypes.UserStatsReceived param)
         {
+            this._RetrievePending = false;
+            this._RetrieveTimeoutTimer.Stop();
+
             if (param.Result != 1)
             {
                 this._GameStatusLabel.Text = $"Error while retrieving stats: {TranslateError(param.Result)}";
@@ -737,6 +783,10 @@ namespace SAM.Game
 
             this._GameStatusLabel.Text = "Retrieving stat information...";
             this.DisableInput();
+
+            this._RetrievePending = true;
+            this._RetrieveTimeoutTimer.Stop();
+            this._RetrieveTimeoutTimer.Start();
         }
 
         private bool _IsUpdatingAchievementList;
@@ -809,7 +859,7 @@ namespace SAM.Game
 
         private void GetAchievements()
         {
-            var textSearch = this._MatchingStringTextBox.Text.Length > 0
+            var textSearch = this._MatchingStringTextBox.Text.Length >= MinimumSearchLength
                 ? this._MatchingStringTextBox.Text
                 : null;
 
@@ -1004,23 +1054,10 @@ namespace SAM.Game
 
         private int StoreAchievements()
         {
-            if (this._AchievementListView.Items.Count == 0)
-            {
-                return 0;
-            }
-
-            List<(Stats.AchievementInfo Info, bool Value)> pending = new();
-            foreach (ListViewItem item in this._AchievementListView.Items)
-            {
-                if (item.Tag is not Stats.AchievementInfo achievementInfo ||
-                    achievementInfo.IsAchieved == item.Checked)
-                {
-                    continue;
-                }
-
-                pending.Add((achievementInfo, item.Checked));
-            }
-
+            // The pending dictionary is the source of truth, not the ListView: the latter
+            // only holds the rows the current filter leaves visible, so driving the store
+            // from it silently dropped a tick made before filtering.
+            List<(string Id, bool Value)> pending = CollectPendingAchievements(this._PendingAchievementStates);
             if (pending.Count == 0)
             {
                 return 0;
@@ -1028,12 +1065,12 @@ namespace SAM.Game
 
             for (int i = 0; i < pending.Count; i++)
             {
-                var (info, value) = pending[i];
-                if (this._SteamClient.SteamUserStats.SetAchievement(info.Id, value) == false)
+                var (id, value) = pending[i];
+                if (this._SteamClient.SteamUserStats.SetAchievement(id, value) == false)
                 {
                     MessageBox.Show(
                         this,
-                        $"An error occurred while setting the state for {info.Id}, aborting store.\n" +
+                        $"An error occurred while setting the state for {id}, aborting store.\n" +
                         $"{pending.Count - i} change(s) have not been applied.",
                         "Error",
                         MessageBoxButtons.OK,
@@ -1041,12 +1078,36 @@ namespace SAM.Game
                     return -1;
                 }
 
-                // Only update the model once Steam accepted the change, so a failure
-                // leaves the remaining changes detectable on the next attempt.
-                info.IsAchieved = value;
+                // Only drop the entry once Steam accepted it, so a failure leaves the
+                // remaining changes pending and retryable.
+                this._PendingAchievementStates.Remove(id);
             }
 
             return pending.Count;
+        }
+
+        // Split out of StoreAchievements so the "ticked then filtered out" case is covered
+        // by a plain unit test (see ManagerErrorTests).
+        internal static List<(string Id, bool Value)> CollectPendingAchievements(
+            IDictionary<string, bool> pendingStates)
+        {
+            List<(string Id, bool Value)> changes = new();
+            if (pendingStates == null)
+            {
+                return changes;
+            }
+
+            foreach (var pair in pendingStates)
+            {
+                if (string.IsNullOrEmpty(pair.Key) == true)
+                {
+                    continue;
+                }
+
+                changes.Add((pair.Key, pair.Value));
+            }
+
+            return changes;
         }
 
         private int StoreStatistics()
@@ -1270,6 +1331,35 @@ namespace SAM.Game
             }
 
             this.RefreshStats();
+        }
+
+        // Steam never answered RequestUserStats: hand the controls back instead of leaving
+        // the window stuck on "Retrieving stat information..." until it is closed.
+        private void OnRetrieveTimeout(object sender, EventArgs e)
+        {
+            this._RetrieveTimeoutTimer.Stop();
+            if (this._RetrievePending == false)
+            {
+                return;
+            }
+
+            MessageBox.Show(
+                this,
+                "Steam did not answer the request for the stats of this game within 15 seconds.\n" +
+                "Reload once Steam is responsive.",
+                "Warning",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+
+            // The answer may have arrived while the dialog was open.
+            if (this._RetrievePending == false)
+            {
+                return;
+            }
+
+            this._RetrievePending = false;
+            this._GameStatusLabel.Text = "Steam did not answer the stats request.";
+            this.EnableInput();
         }
 
         private void OnStoreTimeout(object sender, EventArgs e)

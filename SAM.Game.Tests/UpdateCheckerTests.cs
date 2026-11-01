@@ -27,6 +27,9 @@ namespace SAM.Game.Tests
 {
     public class UpdateCheckerTests
     {
+        private const string SampleChecksum =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
         private const string SampleRelease = @"{
             ""tag_name"": ""7.2.0"",
             ""body"": ""Release notes."",
@@ -125,6 +128,36 @@ namespace SAM.Game.Tests
         public void ExtractChecksum_RejectsAnythingThatIsNotAsha256(string text)
         {
             Assert.Null(UpdateChecker.ExtractChecksum(text));
+        }
+
+        [Fact]
+        public void ResolveChecksum_RefusesAReleaseWithoutAChecksum()
+        {
+            // An archive that cannot be verified is never installed.
+            Assert.Throws<System.IO.InvalidDataException>(
+                () => UpdateChecker.ResolveChecksum(null, null));
+            Assert.Throws<System.IO.InvalidDataException>(
+                () => UpdateChecker.ResolveChecksum("", SampleChecksum));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("no hash here")]
+        public void ResolveChecksum_RefusesAMalformedChecksum(string published)
+        {
+            Assert.Throws<System.IO.InvalidDataException>(
+                () => UpdateChecker.ResolveChecksum("https://example.test/update.zip.sha256", published));
+        }
+
+        [Fact]
+        public void ResolveChecksum_ReturnsThePublishedSha256()
+        {
+            Assert.Equal(
+                SampleChecksum,
+                UpdateChecker.ResolveChecksum(
+                    "https://example.test/update.zip.sha256",
+                    SampleChecksum + "  update.zip"));
         }
     }
 }

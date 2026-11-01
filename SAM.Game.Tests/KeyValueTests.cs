@@ -208,6 +208,31 @@ namespace SAM.Game.Tests
         }
 
         [Fact]
+        public void ReadAsBinary_RejectsStringTruncatedBeforeItsTerminator()
+        {
+            // A schema Steam rewrites while it is being read can end in the middle of a
+            // string; the reader used to spin there forever instead of reporting the file.
+            var buffer = new List<byte>();
+            buffer.Add((byte)KeyValueType.String);
+            buffer.AddRange(Encoding.UTF8.GetBytes("nam"));
+
+            Assert.False(new KeyValue().ReadAsBinary(new MemoryStream(buffer.ToArray())));
+        }
+
+        [Fact]
+        public void ReadAsBinary_RejectsValueTruncatedMidInteger()
+        {
+            var buffer = new List<byte>();
+            buffer.Add((byte)KeyValueType.Int32);
+            WriteName(buffer, "count");
+            buffer.Add(1);
+            buffer.Add(2);
+            buffer.Add(3);
+
+            Assert.False(new KeyValue().ReadAsBinary(new MemoryStream(buffer.ToArray())));
+        }
+
+        [Fact]
         public void ReadAsBinary_RejectsUnknownType()
         {
             var buffer = new List<byte>() { 99, 0 };

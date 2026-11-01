@@ -250,6 +250,26 @@ namespace SAM.Picker
             return match.Success == true ? match.Value : null;
         }
 
+        // Verifying the archive is mandatory: when a release does not publish a checksum
+        // the update is refused instead of being installed unverified.
+        internal static string ResolveChecksum(string checksumUrl, string publishedText)
+        {
+            if (string.IsNullOrEmpty(checksumUrl) == true)
+            {
+                throw new InvalidDataException(
+                    "The release does not publish a checksum; the update was not applied.");
+            }
+
+            var checksum = ExtractChecksum(publishedText);
+            if (string.IsNullOrEmpty(checksum) == true)
+            {
+                throw new InvalidDataException(
+                    "The published checksum is missing or malformed; the update was not applied.");
+            }
+
+            return checksum;
+        }
+
         private static string ComputeSha256(string path)
         {
             using var stream = File.OpenRead(path);
@@ -288,33 +308,20 @@ namespace SAM.Picker
                         .GetAwaiter()
                         .GetResult();
 
-                    if (string.IsNullOrEmpty(info.ChecksumUrl) == false)
-                    {
-                        // The checksum is published next to the archive: refuse to
-                        // install anything whose integrity cannot be checked.
-                        var text = downloader.DownloadString(info.ChecksumUrl);
-                        checksum = ExtractChecksum(text);
-                        if (string.IsNullOrEmpty(checksum) == true)
-                        {
-                            throw new InvalidDataException(
-                                "The published checksum is missing or malformed; the update was not applied.");
-                        }
-                    }
-                    else
-                    {
-                        checksum = null;
-                    }
+                    // The checksum is published next to the archive. A release without
+                    // one is refused instead of being installed unverified.
+                    var published = string.IsNullOrEmpty(info.ChecksumUrl) == false
+                        ? downloader.DownloadString(info.ChecksumUrl)
+                        : null;
+                    checksum = ResolveChecksum(info.ChecksumUrl, published);
                 }
 
-                if (string.IsNullOrEmpty(checksum) == false)
+                var actual = ComputeSha256(zipPath);
+                if (string.Equals(actual, checksum, StringComparison.OrdinalIgnoreCase) == false)
                 {
-                    var actual = ComputeSha256(zipPath);
-                    if (string.Equals(actual, checksum, StringComparison.OrdinalIgnoreCase) == false)
-                    {
-                        throw new InvalidDataException(
-                            $"Checksum mismatch ({actual} != {checksum}): the download was corrupted " +
-                            "and the update was not applied.");
-                    }
+                    throw new InvalidDataException(
+                        $"Checksum mismatch ({actual} != {checksum}): the download was corrupted " +
+                        "and the update was not applied.");
                 }
 
                 // Cheap structural check so a truncated or HTML-failure download
@@ -413,20 +420,22 @@ while ($true) {
     Start-Sleep -Milliseconds 500
 }
 
-# Verify the payload before touching a single installed file.
-if ($Hash) {
-    $stream = [System.IO.File]::OpenRead($Zip)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $actual = ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '')
-    } finally {
-        $stream.Dispose()
-        $sha.Dispose()
-    }
-    if ($actual -ne $Hash.ToUpperInvariant()) {
-        Fail ('Checksum mismatch for the downloaded archive (got ' + $actual +
-              ', expected ' + $Hash + '). The installed files were left untouched.')
-    }
+# Verify the payload before touching a single installed file. A missing hash is a
+# failure, never a reason to skip the check.
+if (-not $Hash) {
+    Fail 'No checksum was provided for the downloaded archive. The installed files were left untouched.'
+}
+$stream = [System.IO.File]::OpenRead($Zip)
+$sha = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $actual = ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '')
+} finally {
+    $stream.Dispose()
+    $sha.Dispose()
+}
+if ($actual -ne $Hash.ToUpperInvariant()) {
+    Fail ('Checksum mismatch for the downloaded archive (got ' + $actual +
+          ', expected ' + $Hash + '). The installed files were left untouched.')
 }
 
 # Extract over the application directory, and never outside of it.
@@ -460,7 +469,9 @@ try {
           ' You can apply the archive manually instead.')
 }
 
-Remove-Item -Force $Zip -ErrorAction SilentlyContinue
+# The archive and this script live in a %TEMP% folder: drop the whole folder so
+# successive updates do not pile up there.
+Remove-Item -LiteralPath (Split-Path -Parent $Zip) -Recurse -Force -ErrorAction SilentlyContinue
 
 # Restart the tool.
 $started = Join-Path $Target $Executable

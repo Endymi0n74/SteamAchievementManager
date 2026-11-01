@@ -20,6 +20,7 @@
  *    distribution.
  */
 
+using System.Collections.Generic;
 using Xunit;
 
 namespace SAM.Game.Tests
@@ -65,6 +66,41 @@ namespace SAM.Game.Tests
             {
                 Assert.False(string.IsNullOrWhiteSpace(Manager.TranslateError(id)));
             }
+        }
+
+        [Fact]
+        public void CollectPendingAchievements_KeepsChangesTheFilterHides()
+        {
+            // The ListView only holds the rows the filter leaves visible: a tick recorded
+            // before filtering the achievement out must still reach Steam.
+            var pending = new Dictionary<string, bool>
+            {
+                ["ACH_VISIBLE"] = true,
+                ["ACH_HIDDEN"] = false,
+            };
+
+            var changes = Manager.CollectPendingAchievements(pending);
+
+            Assert.Equal(2, changes.Count);
+            Assert.Contains(changes, change => change.Id == "ACH_HIDDEN" && change.Value == false);
+        }
+
+        [Fact]
+        public void CollectPendingAchievements_IsEmptyWithoutPendingChanges()
+        {
+            Assert.Empty(Manager.CollectPendingAchievements(null));
+            Assert.Empty(Manager.CollectPendingAchievements(new Dictionary<string, bool>()));
+        }
+
+        [Fact]
+        public void CollectPendingAchievements_SkipsEntriesWithoutAnId()
+        {
+            var pending = new Dictionary<string, bool>
+            {
+                [""] = true,
+            };
+
+            Assert.Empty(Manager.CollectPendingAchievements(pending));
         }
 
         [Fact]
